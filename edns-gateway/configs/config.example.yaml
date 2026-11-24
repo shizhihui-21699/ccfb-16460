@@ -1,0 +1,88 @@
+# edns-gateway 配置示例
+# 复制为 config.yaml 后按现场环境修改；SIGHUP 可热更新策略/名单/阈值。
+
+capture:
+  # pcap：镜像口/离线分析；nfqueue：生产网关在线拦截（仅 Linux）
+  mode: nfqueue
+  interface: eth0            # pcap 实时模式网卡
+  pcap_file: ""              # analyze 离线模式由 -f 指定，这里留空
+  bpf_filter: "tcp or udp"
+  snap_len: 65535
+  nfqueue_id: 170
+  nfqueue_family: ipv4       # ipv4 | ipv6（ipv6 需另起实例或双队列）
+  nfqueue_len: 4096
+
+detect:
+  # 三档阈值（0-100），需满足 block >= redirect >= observe
+  block_threshold: 90
+  redirect_threshold: 60
+  observe_threshold: 25
+  flow_idle_timeout: 5m
+  flow_max_lifetime: 1h
+  flow_cache_entries: 200000
+  behavior_window: 10m
+  behavior_min_samples: 4
+  behavior_short_sni_ratio: 0.8
+  # 已知恶意客户端 JA4 指纹，命中即高置信（留空则不启用）
+  ja4_blocklist: []
+
+intel:
+  use_builtin: true          # 内置 Google/Cloudflare/Quad9/阿里/DNSPod 等基线
+  refresh_every: 1h
+  cache_file: /var/lib/edns-gateway/intel.cache
+  feeds:
+    - name: 威胁情报平台-DoH
+      type: url               # url | local
+      path: https://ti.example.com/feeds/doh.txt
+      category: doh
+    - name: 自建解析器清单
+      type: local
+      path: /etc/edns-gateway/resolvers.txt
+      category: doh
+
+policy:
+  # 默认与分协议动作：observe | redirect | block
+  default_action: redirect
+  doh_action: redirect
+  dot_action: redirect
+  doq_action: redirect
+  unknown_action: observe    # 仅行为可疑、协议未坐实时先观察，避免误伤
+  # 业务白名单（强制加密解析且不能中断的软件）：命中直接放行
+  allow_sni:
+    - doh.allowed-vendor.example
+  allow_cidr:
+    - 192.0.2.0/24
+  block_sni:
+    - confirmed-malicious-resolver.example
+  block_cidr:
+    - 203.0.113.0/24
+
+redirect:
+  # 内部加密 DNS 兼容前端监听地址
+  doh_listen: 0.0.0.0:8443
+  dot_listen: 0.0.0.0:8853
+  doq_listen: 0.0.0.0:8853
+  # 企业 CA（cert 子命令生成，或接入企业 PKI）；前端按 SNI 动态签发叶子证书
+  cert_file: /etc/edns-gateway/certs/ca.crt
+  key_file: /etc/edns-gateway/certs/ca.key
+  # tproxy：nftables 透明接管（推荐）；nat：DNAT；answer：DNS 应答引导
+  mode: tproxy
+  service_ipv4: 10.0.0.1
+  service_ipv6: ""
+
+resolver:
+  # 企业内部递归（明文 53），既有的恶意域名拦截/审计策略在这里统一生效
+  upstream: 10.0.0.53:53
+  fallback: ""               # 内部递归故障时的兜底，留空则返回 SERVFAIL
+  timeout: 3s
+  doq_max_udp_payload: 65535
+
+logging:
+  audit_file: /var/log/edns-gateway/audit.jsonl
+  json: true
+  level: info                # debug | info | warn | error
+  rotate_size_mb: 100
+
+metrics:
+  listen: 127.0.0.1:9100
+  path: /metrics

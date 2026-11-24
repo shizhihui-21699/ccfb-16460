@@ -1,0 +1,30 @@
+[Unit]
+Description=Enterprise Encrypted DNS Detection & Redirect Gateway
+Documentation=https://internal.example.com/edns-gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=edns
+Group=edns
+ExecStart=/usr/local/bin/edns-gateway run -c /etc/edns-gateway/config.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=1048576
+
+# 安全加固
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+
+# 目录与权限
+StateDirectory=edns-gateway
+LogsDirectory=edns-gateway
+
+[Install]
+WantedBy=multi-user.target

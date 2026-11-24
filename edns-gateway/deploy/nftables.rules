@@ -1,0 +1,61 @@
+#!/usr/sbin/nft -f
+#
+# edns-gateway nftables 部署规则（IPv4）
+#
+# 数据面工作流：
+#   1. 出口方向 TCP/UDP 首包送入 NFQUEUE 170，Go 引擎异步给 verdict
+#      - block    -> drop
+#      - redirect -> accept + connmark 0xED(237)
+#      - 其他     -> accept
+#   2. 带 0xED connmark 的流被 TPROXY 到本机加密 DNS 前端（DoH/DoT/DoQ）
+#   3. 前端用企业 CA 按 SNI 动态签发证书，解密后把 DNS 查询转发给内部递归
+#
+# 前置条件：
+#   ip rule add fwmark 0xED lookup 100
+#   ip route add local 0.0.0.0/0 dev lo table 100
+#   sysctl -w net.ipv4.ip_forward=1
+#
+# 前端端口与 configs/config.example.yaml 保持一致：
+#   DoH 0.0.0.0:8443 (TCP)  DoT 0.0.0.0:8853 (TCP)  DoQ 0.0.0.0:8853 (UDP)
+
+table inet edns_gateway {
+    # 内网网段集合（按实际环境填充），只检测内网主机发起的流量
+    set internal_nets {
+        type ipv4_addr
+        flags interval
+        elements = { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 }
+    }
+}
+
+table inet filter {
+    chain prerouting {
+        type filter hook prerouting priority mangle - 5; policy accept;
+
+        # 只处理内网发起、非本机的 TCP/UDP
+        ip saddr @internal_nets meta l4proto { tcp, udp } jump edns_inspect
+        meta mark 0xED jump edns_tproxy
+    }
+
+    chain edns_inspect {
+        # 已判定流（connmark 已打）直接放行，避免重复入队
+        ct mark 0xED accept
+        # 无连接跟踪的报文不入队
+        ct state new queue num 170 bypass
+        # bypass：用户态程序故障/队列满时内核放行（fail-open，保证不断网）
+    }
+
+    chain edns_tproxy {
+        # DoT：TCP/853 -> 本机 8853
+        meta l4proto tcp tcp dport 853 tproxy to :8853 accept
+        # DoQ：UDP/443 与 UDP/8853 -> 本机 8853
+        meta l4proto udp udp dport { 443, 8853 } tproxy to :8853 accept
+        # DoH：TCP/443（命中标记后）-> 本机 8443
+        meta l4proto tcp tcp dport 443 tproxy to :8443 accept
+    }
+
+    # 本机前端发起的上游递归/转发流量明确放行，避免回环
+    chain output {
+        type filter hook output priority mangle - 5; policy accept;
+        meta mark 0xED ct state new mark set 0 accept
+    }
+}
