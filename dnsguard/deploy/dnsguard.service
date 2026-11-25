@@ -1,0 +1,14 @@
+[Unit]
+Description=dnsguard - encrypted DNS detection and redirection
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/dnsguard -config /etc/dnsguard/dnsguard.yaml
+Restart=on-failure
+RestartSec=3
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

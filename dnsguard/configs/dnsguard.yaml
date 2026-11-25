@@ -1,0 +1,33 @@
+# dnsguard 配置样例
+queue_num: 100
+log_only: true            # 上线初期先只审计,确认无误报后改 false
+block_timeout_sec: 600    # 检出后动态封禁目标 IP 的时长
+
+internal_resolvers:
+  - "10.0.0.53"
+
+nft_table: dnsguard
+metrics_addr: "127.0.0.1:9153"
+
+feeds:
+  refresh_interval: 6h
+  urls:
+    # dibdot 维护的 DoH IP/域名清单(社区主流,更新频繁)
+    - https://raw.githubusercontent.com/dibdot/DoH-IP-blocklists/master/doh-ipv4.txt
+    - https://raw.githubusercontent.com/dibdot/DoH-IP-blocklists/master/doh-ipv6.txt
+    - https://raw.githubusercontent.com/dibdot/DoH-IP-blocklists/master/doh-domains_overall.txt
+    # curl 官方 DoH 服务器 JSON
+    - https://raw.githubusercontent.com/curl/curl-for-win/main/doh-servers.json
+
+canary:
+  report_interval: 10m
+
+# 业务软件强制使用加密解析的例外:放行并审计,不能简单阻断
+exceptions:
+  - comment: "财务软件硬编码 Cloudflare DoH"
+    src: "10.20.30.0/24"
+    allow_sni: ["cloudflare-dns.com"]
+    allow_dst: ["1.1.1.1", "1.0.0.1"]
+  - comment: "开发测试机允许 dns.google"
+    src: "10.40.0.0/24"
+    allow_sni: ["dns.google"]

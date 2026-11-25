@@ -1,0 +1,59 @@
+#!/usr/sbin/nft -f
+# dnsguard nftables 规则。加载: nft -f deploy/dnsguard.nft
+# 注意: 规则在 forward 链上生效(网关转发场景);如网关本机也需管控,再加 output 链。
+
+table inet dnsguard {
+    # ---- 集合(由 dnsguard 进程维护内容) ----
+    set doh4 {
+        type ipv4_addr
+        comment "已知公共 DoH 服务器 IPv4,由清单自动刷新"
+    }
+    set doh6 {
+        type ipv6_addr
+        comment "已知公共 DoH 服务器 IPv6"
+    }
+    set blocked4 {
+        type ipv4_addr
+        flags timeout
+        comment "SNI 检出后动态封禁的目标 IP,带超时"
+    }
+    set bypass_src {
+        type ipv4_addr
+        flags interval
+        elements = { 10.20.30.0/24, 10.40.0.0/24 }   # 例外源网段,与 dnsguard.yaml 保持一致
+    }
+
+    # 内部解析器地址
+    define INTERNAL_DNS = { 10.0.0.53 }
+
+    chain forward {
+        type filter hook forward priority filter; policy accept;
+
+        # ---- 1. 明文 DNS 外泄:DNAT 回内部解析器(引导,不是阻断) ----
+        # 在 nat prerouting 做,见下方 nat 表
+
+        # ---- 2. DoT / DoQ: 独立端口,直接阻断,客户端自动回退系统 DNS ----
+        tcp dport 853 drop
+        udp dport 853 drop
+
+        # ---- 3. 已知 DoH IP:直接丢(覆盖 ECH 等 SNI 不可见场景),例外源网段放行 ----
+        ip saddr @bypass_src accept
+        ip daddr @doh4 tcp dport 443 drop
+        ip daddr @doh4 udp dport 443 drop
+        ip6 daddr @doh6 tcp dport 443 drop
+        ip6 daddr @doh6 udp dport 443 drop
+        ip daddr @blocked4 drop
+
+        # ---- 4. 其余 443 流量:连接初始报文进 NFQUEUE 做 SNI 检测 ----
+        #    ct original bytes 限制只抓每个连接的前 ~3KB,性能开销可控
+        tcp dport 443 ct original bytes 0-3000 queue num 100 bypass
+        udp dport 443 ct original bytes 0-2000 queue num 100 bypass
+    }
+
+    chain dns_redirect {
+        type nat hook prerouting priority dstnat; policy accept;
+        # 非内部解析器的明文 DNS 一律 DNAT 回内部(引导回内部解析服务)
+        udp dport 53 ip daddr != $INTERNAL_DNS dnat ip to 10.0.0.53:53
+        tcp dport 53 ip daddr != $INTERNAL_DNS dnat ip to 10.0.0.53:53
+    }
+}
